@@ -1,19 +1,18 @@
 package mvcc
 
-
-
 import (
 	"percolator_slave1/model"
 	"sync"
 )
 
-
 type Mvcc interface {
 	MvccGet(key string) *model.Node
-	MvccScan(startTs, endTs int64, key,optional string) bool
+	MvccScan(startTs, endTs int64, key, optional string) bool
 	MvccPut(key string, version int64, value interface{}) error
 	MvccDelete(key string, version int64) error
 	MvccDeleteLoc(key string) error
+	// 锁消除
+	ReMvccScan(startTs, endTs int64, key string) bool
 }
 
 type MvccImpl struct {
@@ -28,7 +27,7 @@ func (m *MvccImpl) MvccGet(key string, version int64) (node *model.Node) {
 	// 先 通过committs 找到startts
 	if v, ok := m.Mp[key]; ok {
 		for _, n := range v {
-			if n.Version==nil{
+			if n.Version == nil {
 				continue
 			}
 			if n.Version.CommitTs <= version {
@@ -42,17 +41,17 @@ func (m *MvccImpl) MvccGet(key string, version int64) (node *model.Node) {
 			}
 		}
 	}
-	if node==nil{
+	if node == nil {
 		return
 	}
 	// 再通过startts找到 value
 	if v, ok := m.Mp[key]; ok {
 		for _, n := range v {
-			if n.Value==nil{
+			if n.Value == nil {
 				continue
 			}
 			if n.Value.StartTs <= node.Version.StartTs {
-				 node=n
+				node = n
 			}
 		}
 	}
@@ -63,44 +62,62 @@ func (m *MvccImpl) MvccGet(key string, version int64) (node *model.Node) {
 func (m *MvccImpl) MvccPut(key string, node *model.Node) error {
 	m.rw.Lock()
 	defer m.rw.Unlock()
-	if _,ok:=m.Mp[key];!ok{
-		m.Mp[key]=make([]*model.Node,0)
+	if _, ok := m.Mp[key]; !ok {
+		m.Mp[key] = make([]*model.Node, 0)
 	}
-	m.Mp[key]=append(m.Mp[key],node)
+	m.Mp[key] = append(m.Mp[key], node)
 	return nil
 }
 
-func (m *MvccImpl) MvccScan(startTs, endTs int64, key,optional string) bool {
-
-		for _,v:=range m.Mp[key]{
-			switch optional {
-			case "write":
-				if v.Version!=nil&&v.Version.CommitTs>=startTs&&v.Version.CommitTs<=endTs{
-					 return true
-				}
-			case "lock":
-				if v.Lock!=nil&&v.Lock.StartTs>=startTs&&v.Lock.StartTs<=endTs{
-					return true
-				}
+func (m *MvccImpl) MvccScan(startTs, endTs int64, key, optional string) bool {
+	for _, v := range m.Mp[key] {
+		switch optional {
+		case "write":
+			if v.Version != nil && v.Version.CommitTs >= startTs && v.Version.CommitTs <= endTs {
+				return true
+			}
+		case "lock":
+			if v.Lock != nil && v.Lock.StartTs >= startTs && v.Lock.StartTs <= endTs {
+				return true
 			}
 		}
-   return false
+	}
+	return false
+}
+
+// 可能机器宕机，锁消除
+func (m *MvccImpl) ReMvccScan(startTs, endTs int64, key string) bool {
+	for _, v := range m.Mp[key] {
+		if v.Lock != nil && v.Lock.StartTs >= startTs && v.Lock.StartTs <= endTs {
+			if v.Lock.PrimaryRow != key {
+				if node := m.MvccGet(v.Lock.PrimaryRow, endTs+1); node.Lock != nil && node.Lock.StartTs >= startTs && node.Lock.StartTs <= endTs {
+					return true
+				} else {
+					// 如果primary节点锁已经消除了，secondary节点也消除
+					v.Lock = nil
+				}
+			} else {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func (m *MvccImpl) MvccDelete(key string, version int64) error {
 
-		 return nil
+	return nil
 }
 
-func (m *MvccImpl) MvccDeleteLock(key string,startTs int64) error{
+func (m *MvccImpl) MvccDeleteLock(key string, startTs int64) error {
 	m.rw.Lock()
 	defer m.rw.Unlock()
-	if v,ok:=m.Mp[key];ok{
-		 for _,n:=range v{
-		 	if n.Lock.StartTs==startTs{
-		 		n.Lock=nil
+	if v, ok := m.Mp[key]; ok {
+		for _, n := range v {
+			if n.Lock.StartTs == startTs {
+				n.Lock = nil
 			}
-		 }
+		}
 	}
 	return nil
 }

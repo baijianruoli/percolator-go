@@ -17,7 +17,10 @@ func (m *LoadBalance) MvccGet(key string) (*model.Node, error) {
 	ts := time.Now().Unix()
 	client := m.Clients[hash(key)%len(m.Clients)]
 	if client.MvccScan(0, ts-1, key, "lock") {
-		return nil, errors.New("conflict")
+		// 尝试锁消除
+		if client.ReMvccScan(0, ts-1, key) {
+			return nil, errors.New("conflict")
+		}
 	}
 	node := client.MvccGet(key, ts)
 	return node, nil
