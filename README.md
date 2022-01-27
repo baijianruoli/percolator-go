@@ -4,6 +4,8 @@
 
 TiDB[实现](https://pingcap.com/zh/blog/tidb-transaction-model)
 
+[参考文档](https://andremouche.github.io/tidb/transaction_in_tidb.html)
+
 # 做了什么
 
 第一版简单地实现了percolator分布式事务，简化了论文中的column，因为是一个乐观模型，对于读请求发生的冲突，直接返回报错，并没有像Tidb中实现超时等待（因为时间不够了，之后会补）
