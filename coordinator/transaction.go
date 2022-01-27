@@ -24,9 +24,11 @@ func (t *Transaction) Begin() {
 }
 
 func (t *Transaction) Prewrite(node, primary *mvcc.Operation, startTs int64) error {
+	// 事务开始之后，不能再写入
 	if node.Mvcc.MvccScan(startTs, ENDTS, node.Node.Key, "write") {
 		return errors.New("conflict")
 	}
+	// 全局不能有锁
 	if node.Mvcc.MvccScan(0, ENDTS, node.Node.Key, "lock") {
 		return errors.New("conflict")
 	}
@@ -87,6 +89,7 @@ func (t *Transaction) Commit() error {
 	if len(t.Operation) > 0 {
 		primary = t.Operation[0]
 		if err := t.Prewrite(primary, primary, ts); err != nil {
+			t.Rollback(ts)
 			return err
 		}
 	}
@@ -94,6 +97,7 @@ func (t *Transaction) Commit() error {
 	t.Operation = t.Operation[1:]
 	for _, v := range t.Operation {
 		if err := t.Prewrite(v, primary, ts); err != nil {
+			t.Rollback(ts)
 			return err
 		}
 	}
@@ -101,6 +105,7 @@ func (t *Transaction) Commit() error {
 	commitTs := time.Now().Unix()
 	if primary != nil {
 		if err := t.Write(primary, ts, commitTs); err != nil {
+			t.Rollback(ts)
 			return err
 		}
 	}
@@ -109,4 +114,11 @@ func (t *Transaction) Commit() error {
 		go t.Write(v, ts, commitTs)
 	}
 	return nil
+}
+
+// 回滚节点
+func (t *Transaction) Rollback(ts int64) {
+	for _, v := range t.Operation {
+		v.Mvcc.MvccDeleteLock(v.Node.Key, ts)
+	}
 }

@@ -23,7 +23,9 @@ type MvccImpl struct {
 func (m *MvccImpl) MvccGet(key string, version int64) (node *model.Node) {
 	m.rw.RLock()
 	defer m.rw.RUnlock()
-
+	var (
+		startTs int64
+	)
 	// 先 通过committs 找到startts
 	if v, ok := m.Mp[key]; ok {
 		for _, n := range v {
@@ -36,6 +38,7 @@ func (m *MvccImpl) MvccGet(key string, version int64) (node *model.Node) {
 				} else {
 					if n.Version.CommitTs > node.Version.CommitTs {
 						node = n
+						startTs = node.Version.StartTs
 					}
 				}
 			}
@@ -50,7 +53,8 @@ func (m *MvccImpl) MvccGet(key string, version int64) (node *model.Node) {
 			if n.Value == nil {
 				continue
 			}
-			if n.Value.StartTs <= node.Version.StartTs {
+			if n.Value.StartTs == startTs {
+				n.Version = node.Version
 				node = n
 			}
 		}
@@ -93,7 +97,13 @@ func (m *MvccImpl) ReMvccScan(startTs, endTs int64, key string) bool {
 				if node := m.MvccGet(v.Lock.PrimaryRow, endTs+1); node.Lock != nil && node.Lock.StartTs >= startTs && node.Lock.StartTs <= endTs {
 					return true
 				} else {
-					// 如果primary节点锁已经消除了，secondary节点也消除
+					// 如果primary节点锁已经消除了，secondary节点也消除,同时补齐version
+					m.MvccPut(v.Key, &model.Node{
+						Version: &model.Write{
+							StartTs:  node.Value.StartTs,
+							CommitTs: node.Version.CommitTs,
+						},
+					})
 					v.Lock = nil
 				}
 			} else {
